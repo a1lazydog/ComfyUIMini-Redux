@@ -1,0 +1,85 @@
+/* Main CSS bundle - imports all stylesheets */
+@import './index.css';
+@import './workflow.css';
+@import './queue.css';
+@import './gallery.css';
+@import './import.css';
+@import './settings.css';
+@import './partial/reset.css';
+@import './partial/base.css';
+@import './partial/icons.css';
+@import './partial/imageModal.css';
+@import './partial/overlay.css';
+@import './partial/popup.css';
+@import './partial/actionSheet.css';
+@import './theme/dark.css';
+@import './theme/light.css';
+
+/* Global performance optimizations */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-display: swap;
+}
+
+/* Reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Optimize images */
+img {
+  height: auto;
+  max-width: 100%;
+}
+
+/* Improve focus visibility */
+:focus-visible {
+  outline: 2px solid var(--primary-color, #007bff);
+  outline-offset: 2px;
+}
+
+/* Loading state utilities */
+.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #333;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Lazy loading placeholder */
+.lazy-placeholder {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

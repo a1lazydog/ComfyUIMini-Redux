@@ -29,7 +29,7 @@ function handleComfyWsMessage(clientWs: WebSocket, comfyWs: WebSocket, data: Web
     }
 }
 
-function handleSendImageBuffer(clientWs: WebSocket, buffer: Buffer<ArrayBufferLike>) {
+function handleSendImageBuffer(clientWs: WebSocket, buffer: Buffer) {
     // Handle image buffers like ComfyUI client
     const imageType = buffer.readUInt32BE(0);
     let imageMime;
@@ -56,7 +56,7 @@ function handleSendImageBuffer(clientWs: WebSocket, buffer: Buffer<ArrayBufferLi
     clientWs.send(JSON.stringify(jsonPayload));
 }
 
-function handleSendMessage(clientWs: WebSocket, comfyWs: WebSocket, data: Buffer<ArrayBufferLike>) {
+function handleSendMessage(clientWs: WebSocket, comfyWs: WebSocket, data: Buffer) {
     const messageString = data.toString();
     const message = JSON.parse(messageString);
 
