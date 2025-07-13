@@ -58,9 +58,6 @@ async function handleOpenComfyWsConnection(clientWs: WebSocket, promptId: string
             }));
             
             clientWs.send(JSON.stringify({ type: 'total_images', data: outputNodeIds.length }));
-            
-            logger.logOptional('workflow_structure', 
-                `Analyzed workflow: ${nodeCount} nodes, ${outputNodeIds.length} outputs, dependencies: ${hasDependencies}`);
         }
     } catch (error) {
         handleComfyWsError(clientWs, error);
