@@ -62,7 +62,6 @@ const workflowObject: WorkflowWithMetadata = workflowDataFromEjs ? workflowDataF
 // Use wss:// when the page is served over HTTPS
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
-ws.onopen = () => console.log('Connected to WebSocket client');
 
 // Initialize the page with enhanced progress bar integration
 loadWorkflow().then(() => {
@@ -74,7 +73,7 @@ loadWorkflow().then(() => {
             // Pre-analyze structure without starting progress tracking
             progressBarManager.initializeWithWorkflow(workflowInstance.workflow);
             progressBarManager.reset(); // Reset but keep cached analysis
-            console.log('Progress bar pre-initialized with workflow structure');
+    
         } catch (error) {
             console.warn('Failed to pre-initialize progress bar:', error);
         }
@@ -528,7 +527,6 @@ export async function runWorkflow() {
         elements.cancelRunButton.classList.remove('disabled');
         ws.onmessage = handleWebSocketMessage;
         
-        console.log('Workflow execution started with optimized progress tracking');
     } catch (error) {
         console.error('Failed to send workflow:', error);
         isWorkflowRunning = false;
@@ -574,19 +572,15 @@ function handleWebSocketMessage(event: MessageEvent<any>) {
 
             default:
                 console.warn('Unknown WebSocket message type:', message.type);
-                console.log(message);
                 break;
         }
     } catch (error) {
         console.error('Failed to parse WebSocket message:', error);
-        console.log('Raw message:', event.data);
     }
 }
 
 function handleWorkflowStructure(messageData: WorkflowStructureMessage) {
     // Enhanced workflow structure handling for optimized progress tracking
-    console.log('Received enhanced workflow structure:', messageData);
-    
     // The progress bar can use this additional server-side information
     // to validate or enhance its structure analysis
     const { totalNodes, outputNodeCount, hasDependencies, nodeTypes, promptId } = messageData;
@@ -596,24 +590,6 @@ function handleWorkflowStructure(messageData: WorkflowStructureMessage) {
     if (clientTotalNodes !== totalNodes) {
         console.warn(`Node count mismatch: client=${clientTotalNodes}, server=${totalNodes}`);
         // The optimized progress bar will handle this gracefully
-    }
-    
-    // Log enhanced workflow information for debugging
-    if (hasDependencies !== undefined) {
-        console.log(`Workflow complexity: ${hasDependencies ? 'has dependencies' : 'simple workflow'}`);
-    }
-    
-    if (nodeTypes) {
-        const typesSummary = Object.entries(nodeTypes)
-            .map(([type, count]) => `${count}x ${type}`)
-            .join(', ');
-        console.log(`Node types: ${typesSummary}`);
-    }
-    
-    console.log(`Workflow structure confirmed: ${totalNodes} nodes, ${outputNodeCount} output nodes`);
-    
-    if (promptId) {
-        console.log(`Prompt ID: ${promptId}`);
     }
 }
 
