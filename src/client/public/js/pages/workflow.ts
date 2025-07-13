@@ -83,10 +83,8 @@ loadWorkflow().then(() => {
 
 // Enhanced cleanup on page unload
 window.addEventListener('beforeunload', () => {
-    if (isWorkflowRunning) {
-        // Cancel any running workflow
-        fetch('/comfyui/interrupt').catch(() => {});
-    }
+    // Keep workflows running when leaving the page
+    // Only clean up UI resources
     progressBarManager.cleanup();
     if (ws.readyState === WebSocket.OPEN) {
         ws.close();
