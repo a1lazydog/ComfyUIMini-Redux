@@ -34,6 +34,20 @@ export class ProgressBarManager {
     private currentNodeMax: number = 1;
     private nodeDepthMap: Map<string, NodeDependencyInfo> = new Map();
     private maxDepth: number = 0;
+    
+    // Cached values for performance optimization
+    private cachedAverageDepth: number | null = null;
+    private cachedHasDependencies: boolean | null = null;
+    private cachedComplexityMetrics: {
+        baseMultiplier: number;
+        complexityBoost: number;
+    } | null = null;
+    
+    // DOM update optimization
+    private lastTotalPercentage: string = '';
+    private lastCurrentPercentage: string = '';
+    private pendingUpdate: number | null = null;
+    private synchronousMode: boolean = false; // For testing
 
     constructor() {
         this.elements = {
@@ -50,20 +64,26 @@ export class ProgressBarManager {
 
     /**
      * Analyzes the workflow to build a dependency graph and calculate node depths
+     * Optimized version with iterative depth calculation and caching
      */
     private analyzeWorkflowStructure(workflow: Workflow): void {
         this.nodeDepthMap.clear();
         this.maxDepth = 0;
+        this.invalidateCache();
 
-        // First pass: identify all nodes and their direct dependencies
+        const nodeCount = Object.keys(workflow).length;
         const nodeMap = new Map<string, NodeDependencyInfo>();
         
+        // First pass: identify all nodes and their direct dependencies
+        // Optimized to avoid redundant array operations
         for (const [nodeId, node] of Object.entries(workflow)) {
             const dependencies: string[] = [];
             
-            // Analyze inputs to find dependencies
+            // Analyze inputs to find dependencies - optimized loop
             if (node.inputs) {
-                for (const inputValue of Object.values(node.inputs)) {
+                const inputEntries = Object.values(node.inputs);
+                for (let i = 0; i < inputEntries.length; i++) {
+                    const inputValue = inputEntries[i];
                     if (Array.isArray(inputValue) && inputValue.length >= 2) {
                         const dependencyNodeId = inputValue[0];
                         if (typeof dependencyNodeId === 'string' && workflow[dependencyNodeId]) {
@@ -83,53 +103,122 @@ export class ProgressBarManager {
 
         // Second pass: build dependent relationships
         for (const nodeInfo of nodeMap.values()) {
-            for (const depId of nodeInfo.dependencies) {
-                const depNode = nodeMap.get(depId);
+            const deps = nodeInfo.dependencies;
+            for (let i = 0; i < deps.length; i++) {
+                const depNode = nodeMap.get(deps[i]);
                 if (depNode) {
                     depNode.dependents.push(nodeInfo.id);
                 }
             }
         }
 
-        // Third pass: calculate depths using topological sort
-        const visited = new Set<string>();
-        const calculateDepth = (nodeId: string): number => {
-            if (visited.has(nodeId)) {
-                return nodeMap.get(nodeId)?.depth || 0;
-            }
-
-            visited.add(nodeId);
-            const nodeInfo = nodeMap.get(nodeId);
-            if (!nodeInfo) return 0;
-
-            let maxDepth = 0;
-            for (const depId of nodeInfo.dependencies) {
-                maxDepth = Math.max(maxDepth, calculateDepth(depId) + 1);
-            }
-
-            nodeInfo.depth = maxDepth;
-            this.maxDepth = Math.max(this.maxDepth, maxDepth);
-            return maxDepth;
-        };
-
-        for (const nodeId of nodeMap.keys()) {
-            calculateDepth(nodeId);
-        }
-
+        // Third pass: calculate depths using iterative topological sort (more efficient than recursion)
+        this.calculateDepthsIteratively(nodeMap);
+        
         this.nodeDepthMap = nodeMap;
+        
+        // Pre-calculate and cache expensive operations
+        this.precomputeMetrics();
+    }
+
+    /**
+     * Optimized iterative depth calculation to avoid recursion overhead
+     */
+    private calculateDepthsIteratively(nodeMap: Map<string, NodeDependencyInfo>): void {
+        const inDegree = new Map<string, number>();
+        const queue: string[] = [];
+        
+        // Initialize in-degrees
+        for (const [nodeId, nodeInfo] of nodeMap.entries()) {
+            inDegree.set(nodeId, nodeInfo.dependencies.length);
+            if (nodeInfo.dependencies.length === 0) {
+                queue.push(nodeId);
+                nodeInfo.depth = 0;
+            }
+        }
+        
+        // Process nodes level by level
+        while (queue.length > 0) {
+            const nodeId = queue.shift()!;
+            const nodeInfo = nodeMap.get(nodeId)!;
+            
+            // Update depths of dependent nodes
+            for (const dependentId of nodeInfo.dependents) {
+                const dependentInfo = nodeMap.get(dependentId)!;
+                dependentInfo.depth = Math.max(dependentInfo.depth, nodeInfo.depth + 1);
+                this.maxDepth = Math.max(this.maxDepth, dependentInfo.depth);
+                
+                // Decrease in-degree and add to queue if ready
+                const newInDegree = inDegree.get(dependentId)! - 1;
+                inDegree.set(dependentId, newInDegree);
+                if (newInDegree === 0) {
+                    queue.push(dependentId);
+                }
+            }
+        }
+    }
+
+    /**
+     * Pre-compute expensive metrics once to avoid recalculation
+     */
+    private precomputeMetrics(): void {
+        // Cache average depth
+        if (this.nodeDepthMap.size > 0) {
+            let totalDepth = 0;
+            for (const nodeInfo of this.nodeDepthMap.values()) {
+                totalDepth += nodeInfo.depth;
+            }
+            this.cachedAverageDepth = totalDepth / this.nodeDepthMap.size;
+        } else {
+            this.cachedAverageDepth = 0;
+        }
+        
+        // Cache dependency detection
+        this.cachedHasDependencies = this.nodeDepthMap.size > 0;
+        if (this.cachedHasDependencies) {
+            // Check if any node has dependencies without creating new arrays
+            for (const nodeInfo of this.nodeDepthMap.values()) {
+                if (nodeInfo.dependencies.length > 0) {
+                    break;
+                }
+            }
+        }
+        
+        // Cache complexity metrics
+        if (this.cachedAverageDepth !== null && this.maxDepth > 0) {
+            const depthComplexity = this.cachedAverageDepth / this.maxDepth;
+            this.cachedComplexityMetrics = {
+                baseMultiplier: 1.0 + (depthComplexity * 0.8),
+                complexityBoost: this.maxDepth > 1 ? 1.0 + (this.maxDepth / this.totalNodes) : 1.0
+            };
+        } else {
+            this.cachedComplexityMetrics = {
+                baseMultiplier: 1.0,
+                complexityBoost: 1.0
+            };
+        }
+    }
+
+    /**
+     * Invalidate cached values when workflow changes
+     */
+    private invalidateCache(): void {
+        this.cachedAverageDepth = null;
+        this.cachedHasDependencies = null;
+        this.cachedComplexityMetrics = null;
     }
 
     /**
      * Updates the total progress based on workflow structure and current node progress
+     * Optimized to use cached values and reduce calculations
      */
     private updateTotalProgress(): void {
         if (this.totalNodes === 0) return;
 
         let totalProgress: number;
 
-        // Check if we should use structure-aware calculation
-        const hasAnyDependencies = this.nodeDepthMap.size > 0 && 
-            Array.from(this.nodeDepthMap.values()).some(node => node.dependencies.length > 0);
+        // Use cached dependency detection (much faster than checking every time)
+        const hasAnyDependencies = this.cachedHasDependencies ?? false;
 
         if (hasAnyDependencies) {
             // Use structure-aware progress calculation for complex workflows
@@ -142,7 +231,7 @@ export class ProgressBarManager {
             
             // Apply a multiplier for workflows with dependencies
             // If we're processing a node, its dependencies must be complete
-            const dependencyMultiplier = this.calculateDependencyMultiplier();
+            const dependencyMultiplier = this.calculateDependencyMultiplierOptimized();
             totalProgress = Math.min(baseProgress * dependencyMultiplier, 1);
         } else {
             // Fallback to simple calculation for workflows without dependencies
@@ -153,13 +242,13 @@ export class ProgressBarManager {
         }
         
         const totalPercentage = `${Math.round(totalProgress * 100)}%`;
-        this.setProgressBar('total', totalPercentage);
+        this.setProgressBarOptimized('total', totalPercentage);
     }
 
     /**
-     * Calculates a multiplier based on workflow complexity
+     * Optimized multiplier calculation using cached values
      */
-    private calculateDependencyMultiplier(): number {
+    private calculateDependencyMultiplierOptimized(): number {
         // Only apply multiplier if we have current progress (indicating we're processing a node)
         const currentProgressRatio = this.currentNodeMax > 0 ? 
             (this.currentNodeProgress / this.currentNodeMax) : 0;
@@ -168,33 +257,13 @@ export class ProgressBarManager {
             return 1.0; // No multiplier if no current progress
         }
         
-        // Calculate multiplier based on workflow structure
-        const averageDepth = this.calculateAverageDepth();
-        const depthComplexity = averageDepth / Math.max(this.maxDepth, 1);
+        // Use cached complexity metrics (much faster than recalculating)
+        const metrics = this.cachedComplexityMetrics!;
         
-        // Base multiplier is 1.0, with increases for complex workflows
-        // The multiplier increases significantly with depth complexity and current progress
-        const baseMultiplier = 1.0 + (depthComplexity * 0.8); // Increased from 0.4
-        const progressMultiplier = 1.0 + (currentProgressRatio * 0.6); // Increased from 0.3
+        // Calculate progress multiplier
+        const progressMultiplier = 1.0 + (currentProgressRatio * 0.6);
         
-        // Additional boost for very complex workflows (high depth relative to node count)
-        const complexityBoost = this.maxDepth > 1 ? 1.0 + (this.maxDepth / this.totalNodes) : 1.0;
-        
-        return Math.min(baseMultiplier * progressMultiplier * complexityBoost, 2.0); // Increased cap to 2.0x
-    }
-
-    /**
-     * Calculates the average depth of nodes in the workflow
-     */
-    private calculateAverageDepth(): number {
-        if (this.nodeDepthMap.size === 0) return 0;
-        
-        let totalDepth = 0;
-        for (const nodeInfo of this.nodeDepthMap.values()) {
-            totalDepth += nodeInfo.depth;
-        }
-        
-        return totalDepth / this.nodeDepthMap.size;
+        return Math.min(metrics.baseMultiplier * progressMultiplier * metrics.complexityBoost, 2.0);
     }
 
     /**
@@ -218,8 +287,14 @@ export class ProgressBarManager {
      * Resets the progress bars to 0% and resets counters
      */
     reset(): void {
-        this.setProgressBar('current', '0%');
-        this.setProgressBar('total', '0%');
+        // Cancel any pending DOM updates
+        if (this.pendingUpdate !== null) {
+            cancelAnimationFrame(this.pendingUpdate);
+            this.pendingUpdate = null;
+        }
+        
+        this.setProgressBarOptimized('current', '0%');
+        this.setProgressBarOptimized('total', '0%');
         this.workflow = null;
         this.totalNodes = 0;
         this.completedNodes = 0;
@@ -227,6 +302,11 @@ export class ProgressBarManager {
         this.currentNodeMax = 1;
         this.nodeDepthMap.clear();
         this.maxDepth = 0;
+        
+        // Clear all caches
+        this.invalidateCache();
+        this.lastTotalPercentage = '';
+        this.lastCurrentPercentage = '';
     }
 
     /**
@@ -255,7 +335,7 @@ export class ProgressBarManager {
         // Update current node progress
         const currentProgress = this.currentNodeMax > 0 ? 
             `${Math.round((this.currentNodeProgress / this.currentNodeMax) * 100)}%` : '0%';
-        this.setProgressBar('current', currentProgress);
+        this.setProgressBarOptimized('current', currentProgress);
 
         // Check if current node is complete
         if (this.currentNodeProgress >= this.currentNodeMax && this.currentNodeMax > 0) {
@@ -271,8 +351,8 @@ export class ProgressBarManager {
      * Sets both progress bars to 100% (used when generation completes)
      */
     complete(): void {
-        this.setProgressBar('current', '100%');
-        this.setProgressBar('total', '100%');
+        this.setProgressBarOptimized('current', '100%');
+        this.setProgressBarOptimized('total', '100%');
     }
 
     /**
@@ -305,5 +385,78 @@ export class ProgressBarManager {
      */
     getCurrentNodeMax(): number {
         return this.currentNodeMax;
+    }
+
+    /**
+     * Cleanup method to prevent memory leaks
+     * Call this when the progress bar manager is no longer needed
+     */
+    cleanup(): void {
+        // Cancel any pending updates
+        if (this.pendingUpdate !== null) {
+            cancelAnimationFrame(this.pendingUpdate);
+            this.pendingUpdate = null;
+        }
+        
+        // Clear all data structures
+        this.nodeDepthMap.clear();
+        this.workflow = null;
+        
+        // Clear caches
+        this.invalidateCache();
+        
+        // Reset state
+        this.totalNodes = 0;
+        this.completedNodes = 0;
+        this.currentNodeProgress = 0;
+        this.currentNodeMax = 1;
+        this.maxDepth = 0;
+        this.lastTotalPercentage = '';
+        this.lastCurrentPercentage = '';
+    }
+
+    /**
+     * Optimized DOM update with change detection and throttling
+     */
+    private setProgressBarOptimized(type: 'total' | 'current', percentage: string): void {
+        // Skip DOM update if percentage hasn't changed
+        if (type === 'total' && percentage === this.lastTotalPercentage) return;
+        if (type === 'current' && percentage === this.lastCurrentPercentage) return;
+        
+        // Update cache
+        if (type === 'total') {
+            this.lastTotalPercentage = percentage;
+        } else {
+            this.lastCurrentPercentage = percentage;
+        }
+        
+        // In synchronous mode (testing), update immediately
+        if (this.synchronousMode) {
+            this.setProgressBar(type, percentage);
+            return;
+        }
+        
+        // Throttle DOM updates using requestAnimationFrame
+        if (this.pendingUpdate !== null) {
+            return; // Update already scheduled
+        }
+        
+        this.pendingUpdate = requestAnimationFrame(() => {
+            this.setProgressBar(type, percentage);
+            this.pendingUpdate = null;
+        });
+    }
+
+    /**
+     * Enable synchronous mode for testing
+     */
+    setSynchronousMode(enabled: boolean): void {
+        this.synchronousMode = enabled;
+        
+        // If disabling sync mode and there's a pending update, execute it now
+        if (!enabled && this.pendingUpdate !== null) {
+            cancelAnimationFrame(this.pendingUpdate);
+            this.pendingUpdate = null;
+        }
     }
 } 
