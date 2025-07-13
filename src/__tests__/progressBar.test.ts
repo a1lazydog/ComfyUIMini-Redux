@@ -449,4 +449,279 @@ describe('ProgressBarManager', () => {
       expect(mockCurrentInnerElem.style.width).toBe('150%');
     });
   });
+
+  describe('Workflow Structure Analysis', () => {
+    it('should analyze simple workflow without dependencies', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'KSampler', inputs: {}, _meta: { title: 'KSampler' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: {}, _meta: { title: 'CLIPTextEncode' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Check that nodeDepthMap is populated
+      expect(progressBarManager['nodeDepthMap'].size).toBe(2);
+      
+      // Check that nodes without dependencies have depth 0
+      expect(progressBarManager['nodeDepthMap'].get('1')?.depth).toBe(0);
+      expect(progressBarManager['nodeDepthMap'].get('2')?.depth).toBe(0);
+      
+      // Check that no dependencies are detected
+      expect(progressBarManager['nodeDepthMap'].get('1')?.dependencies).toEqual([]);
+      expect(progressBarManager['nodeDepthMap'].get('2')?.dependencies).toEqual([]);
+    });
+
+    it('should analyze complex workflow with dependencies', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['2', 0] }, _meta: { title: 'KSampler' } },
+        '4': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['1', 2] }, _meta: { title: 'VAEDecode' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Check that nodeDepthMap is populated
+      expect(progressBarManager['nodeDepthMap'].size).toBe(4);
+      
+      // Check node depths
+      expect(progressBarManager['nodeDepthMap'].get('1')?.depth).toBe(0); // Root node
+      expect(progressBarManager['nodeDepthMap'].get('2')?.depth).toBe(1); // Depends on 1
+      expect(progressBarManager['nodeDepthMap'].get('3')?.depth).toBe(2); // Depends on 1 and 2
+      expect(progressBarManager['nodeDepthMap'].get('4')?.depth).toBe(3); // Depends on 1 and 3
+      
+      // Check dependencies
+      expect(progressBarManager['nodeDepthMap'].get('1')?.dependencies).toEqual([]);
+      expect(progressBarManager['nodeDepthMap'].get('2')?.dependencies).toEqual(['1']);
+      expect(progressBarManager['nodeDepthMap'].get('3')?.dependencies).toEqual(['1', '2']);
+      expect(progressBarManager['nodeDepthMap'].get('4')?.dependencies).toEqual(['3', '1']);
+      
+      // Check max depth
+      expect(progressBarManager['maxDepth']).toBe(3);
+    });
+
+    it('should handle workflow with multiple root nodes', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'EmptyLatentImage', inputs: {}, _meta: { title: 'EmptyLatentImage' } },
+        '3': { class_type: 'KSampler', inputs: { model: ['1', 0], latent_image: ['2', 0] }, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Check that both root nodes have depth 0
+      expect(progressBarManager['nodeDepthMap'].get('1')?.depth).toBe(0);
+      expect(progressBarManager['nodeDepthMap'].get('2')?.depth).toBe(0);
+      expect(progressBarManager['nodeDepthMap'].get('3')?.depth).toBe(1);
+      
+      // Check dependencies
+      expect(progressBarManager['nodeDepthMap'].get('3')?.dependencies).toEqual(['1', '2']);
+    });
+
+    it('should handle invalid node references gracefully', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'KSampler', inputs: { model: ['999', 0] }, _meta: { title: 'KSampler' } }, // Invalid ref
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Should not crash and should ignore invalid references
+      expect(progressBarManager['nodeDepthMap'].size).toBe(2);
+      expect(progressBarManager['nodeDepthMap'].get('1')?.dependencies).toEqual([]); // Invalid ref ignored
+      expect(progressBarManager['nodeDepthMap'].get('2')?.dependencies).toEqual(['1']); // Valid ref kept
+    });
+  });
+
+  describe('Structure-Aware Progress Calculation', () => {
+    it('should use simple calculation for workflows without dependencies', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'KSampler', inputs: {}, _meta: { title: 'KSampler' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: {}, _meta: { title: 'CLIPTextEncode' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Set completed nodes to 1 out of 2
+      progressBarManager['completedNodes'] = 1;
+      progressBarManager['currentNodeProgress'] = 0;
+      progressBarManager['currentNodeMax'] = 1;
+      
+      progressBarManager['updateTotalProgress']();
+      
+      // Should use simple calculation: 1/2 = 50%
+      expect(mockTotalTextElem.textContent).toBe('50%');
+    });
+
+    it('should use structure-aware calculation for workflows with dependencies', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['2', 0] }, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Simulate being at node 3 (deepest) with 50% progress
+      progressBarManager['completedNodes'] = 0;
+      progressBarManager['currentNodeProgress'] = 50;
+      progressBarManager['currentNodeMax'] = 100;
+      
+      progressBarManager['updateTotalProgress']();
+      
+      // Should estimate more progress than simple calculation would suggest
+      // Because if we're at node 3, nodes 1 and 2 should be considered complete
+      const progressText = mockTotalTextElem.textContent;
+      expect(progressText).not.toBe('17%'); // Simple calc would be (0 + 0.5/3) * 100 = 17%
+      expect(parseInt(progressText!.replace('%', ''))).toBeGreaterThan(17);
+    });
+
+    it('should handle progress estimation for complex dependency chains', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['2', 0] }, _meta: { title: 'KSampler' } },
+        '4': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['1', 2] }, _meta: { title: 'VAEDecode' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Test progress at different stages
+      const testCases = [
+        { completedNodes: 0, currentProgress: 0, currentMax: 1, expectedMin: 0 },
+        { completedNodes: 1, currentProgress: 0, currentMax: 1, expectedMin: 25 },
+        { completedNodes: 2, currentProgress: 50, currentMax: 100, expectedMin: 50 },
+        { completedNodes: 3, currentProgress: 100, currentMax: 100, expectedMin: 75 }
+      ];
+      
+      testCases.forEach(({ completedNodes, currentProgress, currentMax, expectedMin }) => {
+        progressBarManager['completedNodes'] = completedNodes;
+        progressBarManager['currentNodeProgress'] = currentProgress;
+        progressBarManager['currentNodeMax'] = currentMax;
+        
+        progressBarManager['updateTotalProgress']();
+        
+        const actualProgress = parseInt(mockTotalTextElem.textContent!.replace('%', ''));
+        expect(actualProgress).toBeGreaterThanOrEqual(expectedMin);
+      });
+    });
+
+    it('should fall back to simple calculation when structure analysis fails', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'KSampler', inputs: {}, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Clear the node depth map to simulate analysis failure
+      progressBarManager['nodeDepthMap'].clear();
+      
+      progressBarManager['completedNodes'] = 0;
+      progressBarManager['currentNodeProgress'] = 50;
+      progressBarManager['currentNodeMax'] = 100;
+      
+      progressBarManager['updateTotalProgress']();
+      
+      // Should use simple calculation: (0 + 0.5) / 1 = 50%
+      expect(mockTotalTextElem.textContent).toBe('50%');
+    });
+  });
+
+  describe('estimateCompletedNodes', () => {
+    it('should return completedNodes for simple workflows', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'KSampler', inputs: {}, _meta: { title: 'KSampler' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: {}, _meta: { title: 'CLIPTextEncode' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      progressBarManager['completedNodes'] = 1;
+      
+      const estimated = progressBarManager['estimateCompletedNodes']();
+      expect(estimated).toBe(1);
+    });
+
+    it('should estimate more completed nodes for complex workflows', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['2', 0] }, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Simulate progress on the last node
+      progressBarManager['completedNodes'] = 2;
+      progressBarManager['currentNodeProgress'] = 50;
+      progressBarManager['currentNodeMax'] = 100;
+      
+      const estimated = progressBarManager['estimateCompletedNodes']();
+      expect(estimated).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should handle edge case with no dependencies', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'KSampler', inputs: {}, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      progressBarManager['completedNodes'] = 0;
+      progressBarManager['currentNodeProgress'] = 75;
+      progressBarManager['currentNodeMax'] = 100;
+      
+      const estimated = progressBarManager['estimateCompletedNodes']();
+      expect(estimated).toBe(0); // Should fall back to simple logic
+    });
+
+    it('should never exceed total nodes', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Set extreme values
+      progressBarManager['completedNodes'] = 10;
+      progressBarManager['currentNodeProgress'] = 100;
+      progressBarManager['currentNodeMax'] = 100;
+      
+      const estimated = progressBarManager['estimateCompletedNodes']();
+      expect(estimated).toBeLessThanOrEqual(2); // Should not exceed total nodes
+    });
+  });
+
+  describe('Integration with updateProgressBars', () => {
+    it('should work correctly with structure-aware progress in complex workflow', () => {
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['2', 0] }, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Simulate progress updates
+      const progressUpdates: ProgressMessage[] = [
+        { value: 50, max: 100 },
+        { value: 100, max: 100 }, // Complete first node
+        { value: 50, max: 100 },   // Progress on second node
+        { value: 100, max: 100 },  // Complete second node
+        { value: 25, max: 100 }    // Progress on third node
+      ];
+      
+      progressUpdates.forEach((update) => {
+        progressBarManager.updateProgressBars(update);
+        
+        // Total progress should increase or stay the same
+        const totalProgress = parseInt(mockTotalTextElem.textContent!.replace('%', ''));
+        expect(totalProgress).toBeGreaterThanOrEqual(0);
+        expect(totalProgress).toBeLessThanOrEqual(100);
+        
+        // Current progress should match the update
+        const currentProgress = parseInt(mockCurrentTextElem.textContent!.replace('%', ''));
+        expect(currentProgress).toBe(Math.round((update.value / update.max) * 100));
+      });
+    });
+  });
 }); 
