@@ -573,7 +573,11 @@ describe('ProgressBarManager', () => {
       // Because if we're at node 3, nodes 1 and 2 should be considered complete
       const progressText = mockTotalTextElem.textContent;
       expect(progressText).not.toBe('17%'); // Simple calc would be (0 + 0.5/3) * 100 = 17%
-      expect(parseInt(progressText!.replace('%', ''))).toBeGreaterThan(17);
+      
+      // With structure-aware calculation, should be higher due to dependency multiplier
+      const actualProgress = parseInt(progressText!.replace('%', ''));
+      expect(actualProgress).toBeGreaterThan(17);
+      expect(actualProgress).toBeLessThan(100); // But not complete
     });
 
     it('should handle progress estimation for complex dependency chains', () => {
@@ -627,70 +631,6 @@ describe('ProgressBarManager', () => {
     });
   });
 
-  describe('estimateCompletedNodes', () => {
-    it('should return completedNodes for simple workflows', () => {
-      const mockWorkflow: Workflow = {
-        '1': { class_type: 'KSampler', inputs: {}, _meta: { title: 'KSampler' } },
-        '2': { class_type: 'CLIPTextEncode', inputs: {}, _meta: { title: 'CLIPTextEncode' } }
-      };
-      
-      progressBarManager.initializeWithWorkflow(mockWorkflow);
-      progressBarManager['completedNodes'] = 1;
-      
-      const estimated = progressBarManager['estimateCompletedNodes']();
-      expect(estimated).toBe(1);
-    });
-
-    it('should estimate more completed nodes for complex workflows', () => {
-      const mockWorkflow: Workflow = {
-        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
-        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
-        '3': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['2', 0] }, _meta: { title: 'KSampler' } }
-      };
-      
-      progressBarManager.initializeWithWorkflow(mockWorkflow);
-      
-      // Simulate progress on the last node
-      progressBarManager['completedNodes'] = 2;
-      progressBarManager['currentNodeProgress'] = 50;
-      progressBarManager['currentNodeMax'] = 100;
-      
-      const estimated = progressBarManager['estimateCompletedNodes']();
-      expect(estimated).toBeGreaterThanOrEqual(2);
-    });
-
-    it('should handle edge case with no dependencies', () => {
-      const mockWorkflow: Workflow = {
-        '1': { class_type: 'KSampler', inputs: {}, _meta: { title: 'KSampler' } }
-      };
-      
-      progressBarManager.initializeWithWorkflow(mockWorkflow);
-      progressBarManager['completedNodes'] = 0;
-      progressBarManager['currentNodeProgress'] = 75;
-      progressBarManager['currentNodeMax'] = 100;
-      
-      const estimated = progressBarManager['estimateCompletedNodes']();
-      expect(estimated).toBe(0); // Should fall back to simple logic
-    });
-
-    it('should never exceed total nodes', () => {
-      const mockWorkflow: Workflow = {
-        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
-        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } }
-      };
-      
-      progressBarManager.initializeWithWorkflow(mockWorkflow);
-      
-      // Set extreme values
-      progressBarManager['completedNodes'] = 10;
-      progressBarManager['currentNodeProgress'] = 100;
-      progressBarManager['currentNodeMax'] = 100;
-      
-      const estimated = progressBarManager['estimateCompletedNodes']();
-      expect(estimated).toBeLessThanOrEqual(2); // Should not exceed total nodes
-    });
-  });
-
   describe('Integration with updateProgressBars', () => {
     it('should work correctly with structure-aware progress in complex workflow', () => {
       const mockWorkflow: Workflow = {
@@ -722,6 +662,160 @@ describe('ProgressBarManager', () => {
         const currentProgress = parseInt(mockCurrentTextElem.textContent!.replace('%', ''));
         expect(currentProgress).toBe(Math.round((update.value / update.max) * 100));
       });
+    });
+  });
+
+  describe('Branching and Merging Scenarios', () => {
+    it('should handle branching workflow correctly (one node feeding multiple nodes)', () => {
+      // A → B and A → C (branching)
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'EmptyLatentImage', inputs: { model: ['1', 0] }, _meta: { title: 'EmptyLatentImage' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Check structure analysis
+      expect(progressBarManager['nodeDepthMap'].get('1')?.depth).toBe(0);
+      expect(progressBarManager['nodeDepthMap'].get('2')?.depth).toBe(1);
+      expect(progressBarManager['nodeDepthMap'].get('3')?.depth).toBe(1);
+      
+      // Check dependencies
+      expect(progressBarManager['nodeDepthMap'].get('1')?.dependencies).toEqual([]);
+      expect(progressBarManager['nodeDepthMap'].get('2')?.dependencies).toEqual(['1']);
+      expect(progressBarManager['nodeDepthMap'].get('3')?.dependencies).toEqual(['1']);
+      
+      // Check dependents (node 1 should have both 2 and 3 as dependents)
+      expect(progressBarManager['nodeDepthMap'].get('1')?.dependents).toEqual(expect.arrayContaining(['2', '3']));
+    });
+
+    it('should handle merging workflow correctly (multiple nodes feeding one node)', () => {
+      // A → C and B → C (merging)
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'EmptyLatentImage', inputs: {}, _meta: { title: 'EmptyLatentImage' } },
+        '3': { class_type: 'KSampler', inputs: { model: ['1', 0], latent_image: ['2', 0] }, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Check structure analysis
+      expect(progressBarManager['nodeDepthMap'].get('1')?.depth).toBe(0);
+      expect(progressBarManager['nodeDepthMap'].get('2')?.depth).toBe(0);
+      expect(progressBarManager['nodeDepthMap'].get('3')?.depth).toBe(1); // max(0, 0) + 1 = 1
+      
+      // Check dependencies
+      expect(progressBarManager['nodeDepthMap'].get('1')?.dependencies).toEqual([]);
+      expect(progressBarManager['nodeDepthMap'].get('2')?.dependencies).toEqual([]);
+      expect(progressBarManager['nodeDepthMap'].get('3')?.dependencies).toEqual(['1', '2']);
+    });
+
+    it('should handle complex branching and merging (diamond pattern)', () => {
+      // A → B → D and A → C → D (diamond pattern)
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'VAELoader', inputs: { model: ['1', 0] }, _meta: { title: 'VAELoader' } },
+        '4': { class_type: 'KSampler', inputs: { positive: ['2', 0], vae: ['3', 0] }, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Check structure analysis
+      expect(progressBarManager['nodeDepthMap'].get('1')?.depth).toBe(0); // Root
+      expect(progressBarManager['nodeDepthMap'].get('2')?.depth).toBe(1); // Depends on 1
+      expect(progressBarManager['nodeDepthMap'].get('3')?.depth).toBe(1); // Depends on 1
+      expect(progressBarManager['nodeDepthMap'].get('4')?.depth).toBe(2); // Depends on 2 and 3
+      
+      // Check dependencies
+      expect(progressBarManager['nodeDepthMap'].get('4')?.dependencies).toEqual(['2', '3']);
+    });
+
+    it('should correctly estimate progress for branching scenarios', () => {
+      // A → B and A → C (branching)
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'EmptyLatentImage', inputs: { model: ['1', 0] }, _meta: { title: 'EmptyLatentImage' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Simulate progress on node 2 (one of the branches)
+      progressBarManager['completedNodes'] = 1; // Node 1 is complete
+      progressBarManager['currentNodeProgress'] = 50; // Node 2 is at 50%
+      progressBarManager['currentNodeMax'] = 100;
+      
+      progressBarManager['updateTotalProgress']();
+      
+      // Should show reasonable progress considering the branching structure
+      const totalProgress = parseInt(mockTotalTextElem.textContent!.replace('%', ''));
+      expect(totalProgress).toBeGreaterThan(50); // More than just node 1 complete
+      expect(totalProgress).toBeLessThanOrEqual(100); // But not exceed 100%
+    });
+
+    it('should handle complex diamond pattern progress correctly', () => {
+      // A → B → D and A → C → D (diamond pattern)
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'VAELoader', inputs: { model: ['1', 0] }, _meta: { title: 'VAELoader' } },
+        '4': { class_type: 'KSampler', inputs: { positive: ['2', 0], vae: ['3', 0] }, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Test different stages of the diamond pattern
+      const testCases = [
+        { stage: 'Node 1 complete', completedNodes: 1, currentProgress: 0, expectedMin: 25 },
+        { stage: 'Node 2 in progress', completedNodes: 1, currentProgress: 50, expectedMin: 30 },
+        { stage: 'Node 4 in progress', completedNodes: 0, currentProgress: 25, expectedMin: 10 } // More realistic expectation
+      ];
+      
+      testCases.forEach(({ stage, completedNodes, currentProgress, expectedMin }) => {
+        progressBarManager['completedNodes'] = completedNodes;
+        progressBarManager['currentNodeProgress'] = currentProgress;
+        progressBarManager['currentNodeMax'] = 100;
+        
+        progressBarManager['updateTotalProgress']();
+        
+        const actualProgress = parseInt(mockTotalTextElem.textContent!.replace('%', ''));
+        expect(actualProgress).toBeGreaterThanOrEqual(expectedMin);
+        expect(actualProgress).toBeLessThanOrEqual(100);
+        
+        // Most importantly, should be higher than simple calculation
+        const simpleCalculation = Math.round(((completedNodes + (currentProgress / 100)) / 4) * 100);
+        expect(actualProgress).toBeGreaterThanOrEqual(simpleCalculation);
+      });
+    });
+
+    it('should handle workflow with parallel independent branches', () => {
+      // A → B and C → D (two independent chains)
+      const mockWorkflow: Workflow = {
+        '1': { class_type: 'CheckpointLoaderSimple', inputs: {}, _meta: { title: 'CheckpointLoaderSimple' } },
+        '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1] }, _meta: { title: 'CLIPTextEncode' } },
+        '3': { class_type: 'EmptyLatentImage', inputs: {}, _meta: { title: 'EmptyLatentImage' } },
+        '4': { class_type: 'KSampler', inputs: { latent_image: ['3', 0] }, _meta: { title: 'KSampler' } }
+      };
+      
+      progressBarManager.initializeWithWorkflow(mockWorkflow);
+      
+      // Check structure analysis
+      expect(progressBarManager['nodeDepthMap'].get('1')?.depth).toBe(0);
+      expect(progressBarManager['nodeDepthMap'].get('2')?.depth).toBe(1);
+      expect(progressBarManager['nodeDepthMap'].get('3')?.depth).toBe(0);
+      expect(progressBarManager['nodeDepthMap'].get('4')?.depth).toBe(1);
+      
+      // Test progress estimation for independent branches
+      progressBarManager['completedNodes'] = 2; // Two nodes complete
+      progressBarManager['currentNodeProgress'] = 0;
+      progressBarManager['currentNodeMax'] = 1;
+      
+      progressBarManager['updateTotalProgress']();
+      
+      const totalProgress = parseInt(mockTotalTextElem.textContent!.replace('%', ''));
+      expect(totalProgress).toBe(50); // Should be 2/4 = 50%
     });
   });
 }); 

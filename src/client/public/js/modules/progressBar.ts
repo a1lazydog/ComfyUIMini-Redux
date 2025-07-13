@@ -120,56 +120,81 @@ export class ProgressBarManager {
     }
 
     /**
-     * Estimates which nodes should be considered complete based on current progress
+     * Updates the total progress based on workflow structure and current node progress
      */
-    private estimateCompletedNodes(): number {
-        if (this.nodeDepthMap.size === 0 || this.totalNodes === 0) {
-            return this.completedNodes;
-        }
+    private updateTotalProgress(): void {
+        if (this.totalNodes === 0) return;
 
-        // Check if this is a simple workflow (no dependencies)
-        const hasAnyDependencies = Array.from(this.nodeDepthMap.values()).some(node => node.dependencies.length > 0);
+        let totalProgress: number;
+
+        // Check if we should use structure-aware calculation
+        const hasAnyDependencies = this.nodeDepthMap.size > 0 && 
+            Array.from(this.nodeDepthMap.values()).some(node => node.dependencies.length > 0);
+
+        if (hasAnyDependencies) {
+            // Use structure-aware progress calculation for complex workflows
+            const completedProgress = this.completedNodes / this.totalNodes;
+            const currentNodeProgress = this.currentNodeMax > 0 ? 
+                (this.currentNodeProgress / this.currentNodeMax) / this.totalNodes : 0;
+            
+            // Calculate base progress
+            const baseProgress = completedProgress + currentNodeProgress;
+            
+            // Apply a multiplier for workflows with dependencies
+            // If we're processing a node, its dependencies must be complete
+            const dependencyMultiplier = this.calculateDependencyMultiplier();
+            totalProgress = Math.min(baseProgress * dependencyMultiplier, 1);
+        } else {
+            // Fallback to simple calculation for workflows without dependencies
+            const completedProgress = this.completedNodes / this.totalNodes;
+            const currentNodeProgress = this.currentNodeMax > 0 ? 
+                (this.currentNodeProgress / this.currentNodeMax) / this.totalNodes : 0;
+            totalProgress = Math.min(completedProgress + currentNodeProgress, 1);
+        }
         
-        if (!hasAnyDependencies) {
-            // For simple workflows without dependencies, use the old logic
-            return this.completedNodes;
-        }
+        const totalPercentage = `${Math.round(totalProgress * 100)}%`;
+        this.setProgressBar('total', totalPercentage);
+    }
 
-        // For complex workflows with dependencies, use structure-aware calculation
-        const nodesPerDepth = new Map<number, number>();
-        for (const nodeInfo of this.nodeDepthMap.values()) {
-            nodesPerDepth.set(nodeInfo.depth, (nodesPerDepth.get(nodeInfo.depth) || 0) + 1);
-        }
-
-        // If we have current progress, estimate how many nodes should be complete
-        // based on the assumption that nodes in earlier depths are processed first
+    /**
+     * Calculates a multiplier based on workflow complexity
+     */
+    private calculateDependencyMultiplier(): number {
+        // Only apply multiplier if we have current progress (indicating we're processing a node)
         const currentProgressRatio = this.currentNodeMax > 0 ? 
             (this.currentNodeProgress / this.currentNodeMax) : 0;
         
-        let estimatedCompleted = 0;
-        let progressAccumulator = 0;
-        const totalProgress = this.completedNodes + currentProgressRatio;
-        const progressPerNode = 1.0 / this.totalNodes;
-
-        // Process nodes by depth (earlier depths first)
-        for (let depth = 0; depth <= this.maxDepth; depth++) {
-            const nodesAtDepth = nodesPerDepth.get(depth) || 0;
-            
-            for (let i = 0; i < nodesAtDepth; i++) {
-                progressAccumulator += progressPerNode;
-                if (progressAccumulator <= totalProgress) {
-                    estimatedCompleted++;
-                } else {
-                    break;
-                }
-            }
-            
-            if (progressAccumulator > totalProgress) {
-                break;
-            }
+        if (currentProgressRatio === 0) {
+            return 1.0; // No multiplier if no current progress
         }
+        
+        // Calculate multiplier based on workflow structure
+        const averageDepth = this.calculateAverageDepth();
+        const depthComplexity = averageDepth / Math.max(this.maxDepth, 1);
+        
+        // Base multiplier is 1.0, with increases for complex workflows
+        // The multiplier increases significantly with depth complexity and current progress
+        const baseMultiplier = 1.0 + (depthComplexity * 0.8); // Increased from 0.4
+        const progressMultiplier = 1.0 + (currentProgressRatio * 0.6); // Increased from 0.3
+        
+        // Additional boost for very complex workflows (high depth relative to node count)
+        const complexityBoost = this.maxDepth > 1 ? 1.0 + (this.maxDepth / this.totalNodes) : 1.0;
+        
+        return Math.min(baseMultiplier * progressMultiplier * complexityBoost, 2.0); // Increased cap to 2.0x
+    }
 
-        return Math.min(estimatedCompleted, this.totalNodes);
+    /**
+     * Calculates the average depth of nodes in the workflow
+     */
+    private calculateAverageDepth(): number {
+        if (this.nodeDepthMap.size === 0) return 0;
+        
+        let totalDepth = 0;
+        for (const nodeInfo of this.nodeDepthMap.values()) {
+            totalDepth += nodeInfo.depth;
+        }
+        
+        return totalDepth / this.nodeDepthMap.size;
     }
 
     /**
@@ -240,34 +265,6 @@ export class ProgressBarManager {
 
         // Update total progress
         this.updateTotalProgress();
-    }
-
-    /**
-     * Updates the total progress based on workflow structure and current node progress
-     */
-    private updateTotalProgress(): void {
-        if (this.totalNodes === 0) return;
-
-        let totalProgress: number;
-
-        // Check if we should use structure-aware calculation
-        const hasAnyDependencies = this.nodeDepthMap.size > 0 && 
-            Array.from(this.nodeDepthMap.values()).some(node => node.dependencies.length > 0);
-
-        if (hasAnyDependencies) {
-            // Use structure-aware progress calculation for complex workflows
-            const estimatedCompleted = this.estimateCompletedNodes();
-            totalProgress = Math.min(estimatedCompleted / this.totalNodes, 1);
-        } else {
-            // Fallback to simple calculation for workflows without dependencies
-            const completedProgress = this.completedNodes / this.totalNodes;
-            const currentNodeProgress = this.currentNodeMax > 0 ? 
-                (this.currentNodeProgress / this.currentNodeMax) / this.totalNodes : 0;
-            totalProgress = Math.min(completedProgress + currentNodeProgress, 1);
-        }
-        
-        const totalPercentage = `${Math.round(totalProgress * 100)}%`;
-        this.setProgressBar('total', totalPercentage);
     }
 
     /**
