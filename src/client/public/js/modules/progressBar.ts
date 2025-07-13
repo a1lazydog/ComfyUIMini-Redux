@@ -71,7 +71,6 @@ export class ProgressBarManager {
         this.maxDepth = 0;
         this.invalidateCache();
 
-        const nodeCount = Object.keys(workflow).length;
         const nodeMap = new Map<string, NodeDependencyInfo>();
         
         // First pass: identify all nodes and their direct dependencies

@@ -33,7 +33,7 @@ async function handleOpenComfyWsConnection(clientWs: WebSocket, promptId: string
             let hasDependencies = false;
             
             // Optimized workflow analysis with early exit for dependencies
-            for (const [nodeId, nodeData] of workflowEntries) {
+            for (const [, nodeData] of workflowEntries) {
                 const nodeInfo = nodeData as any;
                 const nodeType = nodeInfo.class_type || 'unknown';
                 

@@ -583,7 +583,7 @@ function handleWorkflowStructure(messageData: WorkflowStructureMessage) {
     // Enhanced workflow structure handling for optimized progress tracking
     // The progress bar can use this additional server-side information
     // to validate or enhance its structure analysis
-    const { totalNodes, outputNodeCount, hasDependencies, nodeTypes, promptId } = messageData;
+    const { totalNodes } = messageData;
     
     // Validate that our client-side analysis matches server-side
     const clientTotalNodes = progressBarManager.getTotalNodeCount();
@@ -722,7 +722,7 @@ function urlToImageElem(imageUrl: string) {
 }
 
 export function cancelRun() {
-    if (elements.cancelRunButton.classList.contains('disabled')) {
+    if (elements.cancelRunButton.classList.contains('disabled') || !isWorkflowRunning) {
         return;
     }
 
