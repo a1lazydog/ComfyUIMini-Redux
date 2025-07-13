@@ -24,22 +24,29 @@ async function handleOpenComfyWsConnection(clientWs: WebSocket, promptId: string
             const workflowStructure = runningItem[2] || {};
             
             // Enhanced workflow structure analysis for optimized progress tracking
-            const nodeCount = Object.keys(workflowStructure).length;
-            const nodeTypes = new Map<string, number>();
+            const workflowEntries = Object.entries(workflowStructure);
+            const nodeCount = workflowEntries.length;
+            const nodeTypes: Record<string, number> = {};
+            
+            // Pre-compute node IDs for O(1) dependency lookup
+            const nodeIds = new Set(Object.keys(workflowStructure));
             let hasDependencies = false;
             
-            // Analyze workflow structure to provide additional metadata
-            for (const [nodeId, nodeData] of Object.entries(workflowStructure)) {
+            // Optimized workflow analysis with early exit for dependencies
+            for (const [nodeId, nodeData] of workflowEntries) {
                 const nodeInfo = nodeData as any;
                 const nodeType = nodeInfo.class_type || 'unknown';
-                nodeTypes.set(nodeType, (nodeTypes.get(nodeType) || 0) + 1);
                 
-                // Check for dependencies (node inputs that reference other nodes)
-                if (nodeInfo.inputs) {
+                // Count node types efficiently
+                nodeTypes[nodeType] = (nodeTypes[nodeType] || 0) + 1;
+                
+                // Fast dependency detection with early exit
+                if (!hasDependencies && nodeInfo.inputs) {
                     for (const inputValue of Object.values(nodeInfo.inputs)) {
                         if (Array.isArray(inputValue) && inputValue.length >= 2 && 
-                            typeof inputValue[0] === 'string' && workflowStructure[inputValue[0]]) {
+                            typeof inputValue[0] === 'string' && nodeIds.has(inputValue[0])) {
                             hasDependencies = true;
+                            break; // Early exit once dependency found
                         }
                     }
                 }
@@ -52,7 +59,7 @@ async function handleOpenComfyWsConnection(clientWs: WebSocket, promptId: string
                     totalNodes: nodeCount,
                     outputNodeCount: outputNodeIds.length,
                     hasDependencies: hasDependencies,
-                    nodeTypes: Object.fromEntries(nodeTypes),
+                    nodeTypes: nodeTypes,
                     promptId: promptId
                 }
             }));
