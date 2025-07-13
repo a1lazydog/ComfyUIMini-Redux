@@ -6,6 +6,9 @@ export interface ProgressMessage {
 export interface WorkflowStructureMessage {
     totalNodes: number;
     outputNodeCount: number;
+    hasDependencies?: boolean;
+    nodeTypes?: Record<string, number>;
+    promptId?: string;
 }
 
 export interface PreviewMessage {

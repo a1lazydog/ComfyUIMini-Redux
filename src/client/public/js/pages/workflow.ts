@@ -47,6 +47,7 @@ const progressBarManager = new ProgressBarManager();
 
 // --- Variables ---
 let previousOutputsLoaded = false;
+let isWorkflowRunning = false;
 
 // @ts-expect-error - passedWorkflowIdentifier is fetched via the inline script supplied by EJS
 const workflowIdentifier = passedWorkflowIdentifier;
@@ -62,6 +63,35 @@ const workflowObject: WorkflowWithMetadata = workflowDataFromEjs ? workflowDataF
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
 ws.onopen = () => console.log('Connected to WebSocket client');
+
+// Initialize the page with enhanced progress bar integration
+loadWorkflow().then(() => {
+    // Pre-initialize progress bar with workflow structure for optimization
+    // This allows the progress bar to pre-compute dependency analysis
+    if (workflowObject) {
+        try {
+            const workflowInstance = new WorkflowInstance(workflowObject);
+            // Pre-analyze structure without starting progress tracking
+            progressBarManager.initializeWithWorkflow(workflowInstance.workflow);
+            progressBarManager.reset(); // Reset but keep cached analysis
+            console.log('Progress bar pre-initialized with workflow structure');
+        } catch (error) {
+            console.warn('Failed to pre-initialize progress bar:', error);
+        }
+    }
+});
+
+// Enhanced cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    if (isWorkflowRunning) {
+        // Cancel any running workflow
+        fetch('/comfyui/interrupt').catch(() => {});
+    }
+    progressBarManager.cleanup();
+    if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+    }
+});
 
 async function loadWorkflow() {
     try {
@@ -474,6 +504,10 @@ function handleInputRandomise(randomiseButtonContainer: Element) {
 }
 
 export async function runWorkflow() {
+    // Set running state for proper cleanup
+    isWorkflowRunning = true;
+    
+    // Reset progress bar (but keep cached analysis if available)
     progressBarManager.reset();
 
     const filledNodeInputValues = generateNodeInputValues();
@@ -481,7 +515,8 @@ export async function runWorkflow() {
 
     const filledWorkflow = new WorkflowInstance(workflowObject).fillWorkflowWithUserInputs(filledNodeInputValues);
     
-    // Initialize progress manager with the workflow
+    // Initialize progress manager with the filled workflow
+    // This will use cached analysis if available from pre-initialization
     progressBarManager.initializeWithWorkflow(filledWorkflow);
     
     // Send both workflow and workflow name
@@ -490,57 +525,102 @@ export async function runWorkflow() {
         workflowName: workflowObject._comfyuimini_meta?.title || workflowIdentifier
     };
     
-    ws.send(JSON.stringify(message));
-
-    elements.cancelRunButton.classList.remove('disabled');
-
-    ws.onmessage = handleWebSocketMessage;
+    try {
+        ws.send(JSON.stringify(message));
+        elements.cancelRunButton.classList.remove('disabled');
+        ws.onmessage = handleWebSocketMessage;
+        
+        console.log('Workflow execution started with optimized progress tracking');
+    } catch (error) {
+        console.error('Failed to send workflow:', error);
+        isWorkflowRunning = false;
+        progressBarManager.reset();
+        openPopupWindow('Failed to start workflow execution', PopupWindowType.ERROR);
+    }
 }
 
 // TODO: Setup type for message for both client and server
 function handleWebSocketMessage(event: MessageEvent<any>) {
-    const message = JSON.parse(event.data);
+    try {
+        const message = JSON.parse(event.data);
 
-    switch (message.type) {
-        case 'workflow_structure':
-            handleWorkflowStructure(message.data);
-            break;
+        switch (message.type) {
+            case 'workflow_structure':
+                handleWorkflowStructure(message.data);
+                break;
 
-        case 'progress':
-            updateProgressBars(message.data);
-            break;
+            case 'progress':
+                updateProgressBars(message.data);
+                break;
 
-        case 'preview':
-            updateImagePreview(message.data);
-            break;
+            case 'preview':
+                updateImagePreview(message.data);
+                break;
 
-        case 'total_images':
-            setupImagePlaceholders(message.data);
-            break;
+            case 'total_images':
+                setupImagePlaceholders(message.data);
+                break;
 
-        case 'completed':
-            finishGeneration(message.data);
-            break;
+            case 'completed':
+                finishGeneration(message.data);
+                break;
 
-        case 'error':
-            console.error('Error:', message.message);
-            openPopupWindow(message.message, PopupWindowType.ERROR);
-            break;
+            case 'error':
+                // Enhanced error handling with workflow state management
+                console.error('WebSocket Error:', message.message);
+                isWorkflowRunning = false;
+                progressBarManager.reset();
+                elements.cancelRunButton.classList.add('disabled');
+                openPopupWindow(message.message, PopupWindowType.ERROR);
+                break;
 
-        default:
-            console.warn('Unknown WebSocket message type:', message.type);
-            console.log(message);
-            break;
+            default:
+                console.warn('Unknown WebSocket message type:', message.type);
+                console.log(message);
+                break;
+        }
+    } catch (error) {
+        console.error('Failed to parse WebSocket message:', error);
+        console.log('Raw message:', event.data);
     }
 }
 
 function handleWorkflowStructure(messageData: WorkflowStructureMessage) {
-    // Update progress manager with actual workflow structure from server
-    // This provides more accurate progress tracking based on the actual queue
-    console.log('Received workflow structure:', messageData);
+    // Enhanced workflow structure handling for optimized progress tracking
+    console.log('Received enhanced workflow structure:', messageData);
+    
+    // The progress bar can use this additional server-side information
+    // to validate or enhance its structure analysis
+    const { totalNodes, outputNodeCount, hasDependencies, nodeTypes, promptId } = messageData;
+    
+    // Validate that our client-side analysis matches server-side
+    const clientTotalNodes = progressBarManager.getTotalNodeCount();
+    if (clientTotalNodes !== totalNodes) {
+        console.warn(`Node count mismatch: client=${clientTotalNodes}, server=${totalNodes}`);
+        // The optimized progress bar will handle this gracefully
+    }
+    
+    // Log enhanced workflow information for debugging
+    if (hasDependencies !== undefined) {
+        console.log(`Workflow complexity: ${hasDependencies ? 'has dependencies' : 'simple workflow'}`);
+    }
+    
+    if (nodeTypes) {
+        const typesSummary = Object.entries(nodeTypes)
+            .map(([type, count]) => `${count}x ${type}`)
+            .join(', ');
+        console.log(`Node types: ${typesSummary}`);
+    }
+    
+    console.log(`Workflow structure confirmed: ${totalNodes} nodes, ${outputNodeCount} output nodes`);
+    
+    if (promptId) {
+        console.log(`Prompt ID: ${promptId}`);
+    }
 }
 
 function updateProgressBars(messageData: ProgressMessage) {
+    // Enhanced progress update with structure-aware calculations
     progressBarManager.updateProgressBars(messageData);
 }
 
@@ -634,9 +714,12 @@ function addItemToPreviousOutputsListElem(imageUrl: string) {
 }
 
 function finishGeneration(messageData: FinishGenerationMessage) {
-    // --- If using cached image and progress isnt set throughout generation
+    // Mark workflow as no longer running
+    isWorkflowRunning = false;
+    
+    // Complete progress bar with optimized final update
     progressBarManager.complete();
-    // ---
+    
     elements.cancelRunButton.classList.add('disabled');
 
     // Extract all image URLs from the message data
@@ -656,6 +739,8 @@ function finishGeneration(messageData: FinishGenerationMessage) {
         previousOutputsLoaded = false;
         loadPreviousOutputsFromAPI();
     }
+    
+    console.log('Workflow generation completed successfully');
 }
 
 function urlToImageElem(imageUrl: string) {
@@ -667,8 +752,19 @@ export function cancelRun() {
         return;
     }
 
-    fetch('/comfyui/interrupt');
+    // Enhanced cancellation with proper state management
+    isWorkflowRunning = false;
+    
+    // Reset progress bar to clear any pending updates
+    progressBarManager.reset();
+    
+    fetch('/comfyui/interrupt').catch((error) => {
+        console.warn('Failed to send interrupt signal:', error);
+    });
+    
     elements.cancelRunButton.classList.add('disabled');
+    
+    console.log('Workflow execution cancelled');
 }
 
 /**

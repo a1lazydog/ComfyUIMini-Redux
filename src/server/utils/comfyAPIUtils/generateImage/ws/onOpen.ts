@@ -21,18 +21,46 @@ async function handleOpenComfyWsConnection(clientWs: WebSocket, promptId: string
 
             const runningItem = queueJson['queue_running'][0] as QueueItem;
             const outputNodeIds = runningItem[4] || [];
-            
-            // Send workflow structure for better progress tracking
             const workflowStructure = runningItem[2] || {};
+            
+            // Enhanced workflow structure analysis for optimized progress tracking
+            const nodeCount = Object.keys(workflowStructure).length;
+            const nodeTypes = new Map<string, number>();
+            let hasDependencies = false;
+            
+            // Analyze workflow structure to provide additional metadata
+            for (const [nodeId, nodeData] of Object.entries(workflowStructure)) {
+                const nodeInfo = nodeData as any;
+                const nodeType = nodeInfo.class_type || 'unknown';
+                nodeTypes.set(nodeType, (nodeTypes.get(nodeType) || 0) + 1);
+                
+                // Check for dependencies (node inputs that reference other nodes)
+                if (nodeInfo.inputs) {
+                    for (const inputValue of Object.values(nodeInfo.inputs)) {
+                        if (Array.isArray(inputValue) && inputValue.length >= 2 && 
+                            typeof inputValue[0] === 'string' && workflowStructure[inputValue[0]]) {
+                            hasDependencies = true;
+                        }
+                    }
+                }
+            }
+            
+            // Send enhanced workflow structure for optimized progress tracking
             clientWs.send(JSON.stringify({ 
                 type: 'workflow_structure', 
                 data: {
-                    totalNodes: Object.keys(workflowStructure).length,
-                    outputNodeCount: outputNodeIds.length
+                    totalNodes: nodeCount,
+                    outputNodeCount: outputNodeIds.length,
+                    hasDependencies: hasDependencies,
+                    nodeTypes: Object.fromEntries(nodeTypes),
+                    promptId: promptId
                 }
             }));
             
             clientWs.send(JSON.stringify({ type: 'total_images', data: outputNodeIds.length }));
+            
+            logger.logOptional('workflow_structure', 
+                `Analyzed workflow: ${nodeCount} nodes, ${outputNodeIds.length} outputs, dependencies: ${hasDependencies}`);
         }
     } catch (error) {
         handleComfyWsError(clientWs, error);
