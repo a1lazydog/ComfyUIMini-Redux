@@ -35,8 +35,11 @@ const createInputContainer = (id: string, title: string, inputHtml: string, addi
 export function renderImageInput(inputOptions: ImageRenderConfig): string {
     const id = generateInputId(inputOptions.node_id, inputOptions.input_name_in_node);
 
+    // Parse the default value to determine the image type and original filename
+    const imageObj = toImageFromRelativeUrl(inputOptions.default);
+    
     // Create a hidden input to store the selected value
-    const hiddenInput = `<input type="hidden" id="${id}" class="workflow-input" value="${inputOptions.default}" data-original-filename="${inputOptions.default}">`;
+    const hiddenInput = `<input type="hidden" id="${id}" class="workflow-input" value="${inputOptions.default}" data-original-filename="${inputOptions.default}" data-original-type="${imageObj.type}">`;
     
     // Create the display button and preview
     const displayButton = `<button type="button" id="${id}-select-button" class="workflow-input image-select-button" data-fallback-images='${JSON.stringify(inputOptions.list || [])}'>
@@ -51,7 +54,7 @@ export function renderImageInput(inputOptions: ImageRenderConfig): string {
     <input type="file" id="${id}-file_input" data-select-id="${id}" class="file-input" accept="image/jpeg,image/png,image/webp">`;
     
     // Create image preview using the utility function
-    const imagePreview = `<img src="${toComfyUIUrlFromImage(toImageFromRelativeUrl(inputOptions.default, 'input'))}" class="input-image-preview ${inputOptions.default ? '' : 'hidden'}" id="${id}-preview" onerror="this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden');" onload="this.classList.remove('hidden'); this.nextElementSibling.classList.add('hidden');">
+    const imagePreview = `<img src="${toComfyUIUrlFromImage(imageObj)}" class="input-image-preview ${inputOptions.default ? '' : 'hidden'}" id="${id}-preview" onerror="this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden');" onload="this.classList.remove('hidden'); this.nextElementSibling.classList.add('hidden');">
     <div class="input-image-placeholder ${inputOptions.default ? 'hidden' : ''}" id="${id}-placeholder">
         <div class="placeholder-content">
             <span class="icon gallery"></span>
@@ -118,10 +121,8 @@ export async function uploadImageFile(file: File, subfolder?: string, type: Imag
 
 
 
-// Add event handlers for image selection after DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    // Function to create preview with mask overlay
-    async function createPreviewWithMaskOverlay(previewImg: HTMLImageElement, imageSrc: string, originalType?: ImageType, originalSubfolder?: string) {
+// Function to create preview with mask overlay
+export async function createPreviewWithMaskOverlay(previewImg: HTMLImageElement, imageSrc: string, originalType?: ImageType, originalSubfolder?: string) {
         try {
             // Check if this is a masked image (contains clipspace)
             const isMaskedImage = imageSrc.includes('clipspace');
@@ -401,9 +402,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Instead, add event handler for clicking the image preview
-    document.addEventListener('click', async (e) => {
+// Function to set up image input event listeners
+export function setupImageInputEventListeners() {
+    // Add event handler for clicking the image preview (mouse and touch)
+    const handleImagePreviewClick = async (e: Event) => {
         const target = e.target as HTMLElement;
+        
         if (target.classList.contains('input-image-preview') && !target.classList.contains('hidden')) {
             const previewImg = target as HTMLImageElement;
             const inputId = previewImg.id.replace('-preview', '');
@@ -451,5 +455,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
             });
         }
+    };
+
+    // Add both click and touchstart event listeners for cross-platform compatibility
+    document.addEventListener('click', handleImagePreviewClick);
+    document.addEventListener('touchstart', handleImagePreviewClick, { passive: false });
+    
+    // Also attach listeners directly to existing image previews
+    const existingImagePreviews = document.querySelectorAll('.input-image-preview');
+    existingImagePreviews.forEach(img => {
+        img.addEventListener('click', handleImagePreviewClick);
+        img.addEventListener('touchstart', handleImagePreviewClick, { passive: false });
     });
-}); 
+} 
