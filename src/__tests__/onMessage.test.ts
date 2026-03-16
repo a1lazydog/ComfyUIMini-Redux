@@ -429,6 +429,37 @@ describe('handleComfyWsMessage', () => {
         });
     });
 
+    describe('Execution error message handling', () => {
+        it('should send error message for execution errors', () => {
+            const errorMessage = {
+                type: 'execution_error',
+                data: {
+                    prompt_id: 'test-prompt',
+                    node_id: 'test-node',
+                    node_type: 'TestNode',
+                    executed: [],
+                    exception_message: 'Test error occurred',
+                    exception_type: 'ValueError',
+                    traceback: ['line 1', 'line 2']
+                }
+            };
+
+            const messageBuffer = Buffer.from(JSON.stringify(errorMessage));
+
+            handleComfyWsMessage(mockClientWs, mockComfyWs, messageBuffer, false);
+
+            expect(mockLogger.warn).toHaveBeenCalledWith(
+                'Execution error in node "TestNode": [ValueError] Test error occurred'
+            );
+            expect(mockClientWs.send).toHaveBeenCalledWith(
+                JSON.stringify({
+                    type: 'error',
+                    message: 'Node "TestNode" failed: Test error occurred',
+                })
+            );
+        });
+    });
+
     describe('Error handling', () => {
         it('should handle JSON parsing errors gracefully', async () => {
             const invalidJsonBuffer = Buffer.from('invalid json');

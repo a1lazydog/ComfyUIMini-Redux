@@ -48,4 +48,14 @@ export interface ExecutionInterruptedMessage {
     timestamp: number;
 }
 
+export interface ExecutionErrorMessage {
+    prompt_id: string;
+    node_id: string;
+    node_type: string;
+    executed: any[];
+    exception_message: string;
+    exception_type: string;
+    traceback: string[];
+}
+
 export type FinishGenerationMessage = Record<string, string[]>;

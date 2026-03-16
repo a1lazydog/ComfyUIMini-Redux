@@ -3,6 +3,49 @@ import fs from 'fs';
 import path from 'path';
 import config from 'config';
 
+function getContentType(filename: string): string {
+    const ext = path.extname(filename).toLowerCase();
+    if (['.jpg', '.jpeg'].includes(ext)) return 'image/jpeg';
+    if (['.mp4'].includes(ext)) return 'video/mp4';
+    return 'image/png';
+}
+
+function tryFilesystemFallback(filename: string, subfolder: string, type: string) {
+    if (type === 'temp') return null;
+
+    const configKey = type === 'input' ? 'input_dir' : 'output_dir';
+
+    if (!config.has(configKey)) {
+        console.error(`${type === 'input' ? 'Input' : 'Output'} directory not configured in config`);
+        return null;
+    }
+
+    const dirPath = config.get(configKey);
+
+    if (!dirPath || typeof dirPath !== 'string') {
+        console.error(`${type === 'input' ? 'Input' : 'Output'} directory not set properly in config`);
+        return null;
+    }
+
+    const filePath = path.join(dirPath, subfolder, filename);
+
+    if (!fs.existsSync(filePath)) {
+        console.error(`File not found on filesystem: ${filePath}`);
+        return null;
+    }
+
+    const readFile = fs.readFileSync(filePath);
+    const contentType = getContentType(filename);
+
+    return {
+        data: readFile,
+        headers: {
+            'content-type': contentType,
+            'content-length': String(readFile.length),
+        },
+    };
+}
+
 async function getImage(filename: string, subfolder: string, type: string) {
     const params = new URLSearchParams({ filename, subfolder, type });
 
@@ -11,46 +54,15 @@ async function getImage(filename: string, subfolder: string, type: string) {
 
         return response;
     } catch (err: unknown) {
-        if (err instanceof Error && 'code' in err) {
-            if (err.code === 'ECONNREFUSED') {
-                // Fallback if ComfyUI is unavailable
-                const configKey = type === 'input' ? 'input_dir' : 'output_dir';
-                
-                // Check if the configuration property exists
-                if (!config.has(configKey)) {
-                    console.error(`${type === 'input' ? 'Input' : 'Output'} directory not configured in config`);
-                    return null;
-                }
-                
-                const dirPath = config.get(configKey);
-                
-                if (!dirPath || typeof dirPath !== 'string') {
-                    console.error(`${type === 'input' ? 'Input' : 'Output'} directory not set properly in config`);
-                    return null;
-                }
-                
-                const readFile = fs.readFileSync(path.join(dirPath, subfolder, filename));
-                
-                // Determine content type based on file extension
-                const ext = path.extname(filename).toLowerCase();
-                let contentType = 'image/png'; // default
-                
-                if (['.jpg', '.jpeg'].includes(ext)) {
-                    contentType = 'image/jpeg';
-                } else if (['.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp'].includes(ext)) {
-                    contentType = 'image/png';
-                } else if (['.mp4'].includes(ext)) {
-                    contentType = 'video/mp4';
-                }
+        const isConnRefused = err instanceof Error && 'code' in err && err.code === 'ECONNREFUSED';
+        const is404 = err instanceof Error && 'response' in err && (err as any).response?.status === 404;
 
-                return {
-                    data: readFile,
-                    headers: {
-                        'content-type': contentType,
-                        'content-length': readFile.length,
-                    },
-                };
+        if (isConnRefused || is404) {
+            if (is404) {
+                console.warn(`ComfyUI returned 404 for /view?${params.toString()} — attempting filesystem fallback`);
             }
+            const fallback = tryFilesystemFallback(filename, subfolder, type);
+            if (fallback) return fallback;
         }
 
         console.error('Unknown error when fetching image:', err);

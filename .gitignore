@@ -12,3 +12,6 @@ dist/
 .jest-cache/
 coverage/
 *.tsbuildinfo
+
+# Claude Code configuration
+.claude/

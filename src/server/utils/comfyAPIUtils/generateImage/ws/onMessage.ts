@@ -3,12 +3,13 @@ import WebSocket from "ws";
 import getQueue from "../../getQueue";
 import getOutputImages from "../getOutputImages";
 import { QueueItem } from "@shared/types/History";
-import { 
-    ProgressMessage, 
-    NodeExecutingMessage, 
-    NodeExecutedMessage, 
-    ExecutionSuccessMessage, 
+import {
+    ProgressMessage,
+    NodeExecutingMessage,
+    NodeExecutedMessage,
+    ExecutionSuccessMessage,
     ExecutionInterruptedMessage,
+    ExecutionErrorMessage,
     FinishGenerationMessage,
     PreviewMessage,
     WorkflowStructureMessage
@@ -56,13 +57,19 @@ interface ExecutionInterruptedComfyMessage extends ComfyUIMessage {
     data: ExecutionInterruptedMessage;
 }
 
-type ComfyUIMessageTypes = 
-    | StatusMessage 
-    | ProgressComfyMessage 
-    | ExecutingMessage 
-    | ExecutedMessage 
-    | ExecutionSuccessComfyMessage 
-    | ExecutionInterruptedComfyMessage;
+interface ExecutionErrorComfyMessage extends ComfyUIMessage {
+    type: 'execution_error';
+    data: ExecutionErrorMessage;
+}
+
+type ComfyUIMessageTypes =
+    | StatusMessage
+    | ProgressComfyMessage
+    | ExecutingMessage
+    | ExecutedMessage
+    | ExecutionSuccessComfyMessage
+    | ExecutionInterruptedComfyMessage
+    | ExecutionErrorComfyMessage;
 
 // Type for the preview image payload
 interface PreviewImagePayload {
@@ -179,6 +186,9 @@ async function handleSendMessage(clientWs: WebSocket, comfyWs: WebSocket, data: 
         case 'execution_interrupted':
             await handleExecutionInterruptedMessage(clientWs, message as ExecutionInterruptedComfyMessage);
             break;
+        case 'execution_error':
+            handleExecutionErrorMessage(clientWs, message as ExecutionErrorComfyMessage);
+            break;
     }
 }
 
@@ -238,6 +248,15 @@ async function handleExecutionSuccessMessage(clientWs: WebSocket, message: Execu
 async function handleExecutionInterruptedMessage(clientWs: WebSocket, message: ExecutionInterruptedComfyMessage): Promise<void> {
     logger.logOptional('generation_finish', 'Image generation interrupted.');
     await sendCompletionMessage(clientWs, message.data.prompt_id);
+}
+
+function handleExecutionErrorMessage(clientWs: WebSocket, message: ExecutionErrorComfyMessage): void {
+    const { node_type, exception_type, exception_message } = message.data;
+    logger.warn(`Execution error in node "${node_type}": [${exception_type}] ${exception_message}`);
+    clientWs.send(JSON.stringify({
+        type: 'error',
+        message: `Node "${node_type}" failed: ${exception_message}`,
+    }));
 }
 
 async function sendCompletionMessage(clientWs: WebSocket, promptId: string): Promise<void> {
