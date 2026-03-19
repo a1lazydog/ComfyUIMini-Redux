@@ -6,6 +6,12 @@ import logger from '../server/utils/logger';
 import { QueueItem } from '@shared/types/History';
 
 // Mock dependencies
+jest.mock('../server/utils/comfyAPIUtils/comfyUIAxios', () => ({
+    comfyUIAxios: { get: jest.fn(), post: jest.fn() },
+    clientId: 'test-client-id',
+    comfyUIUrl: 'http://localhost:8188',
+    httpsAgent: {},
+}));
 jest.mock('../server/utils/comfyAPIUtils/getQueue');
 jest.mock('../server/utils/comfyAPIUtils/generateImage/getOutputImages');
 jest.mock('../server/utils/logger');
